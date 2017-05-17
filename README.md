@@ -24,7 +24,7 @@ Details after research:
    + the TCP State Machine
    + <img src="http://tcpipguide.com/free/diagrams/tcpfsm.png" />
    + so `TIME_WAIT` status is for the end which do `close` first, and to make sure the peer end receive the last ack. if the last ack is lost, `close` end will close connection after `linger` time. and `FIN` from peer end will retransmit after timeout happened. since `close` end has already close the connection. so a `RST` is sent back, connection is closed for peer end.
-   + but I have a question? if let server close connection first, there must be too many connection in `TIME_WAIT` status, if let client close connection first, there might be too many active connections in server side if client doesn't close connection.
+   + but I have a question? if let server close connection first, there must be too many connection in `TIME_WAIT` status, if let client close connection first, there might be too many active connections in server side if client doesn't close connection. I think I should always let client `close` connection first, and there is a timeout in server side, HEHE, digging back to `Libevent` source code.
    
    
    
