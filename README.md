@@ -11,3 +11,8 @@ Things need to think about in this simple server:
 
 ### Detail
 Details after research:
+ - `SO_KEEPALIVE` in listening socket: 
+   + [TCP Keepalive HOWTO](http://tldp.org/HOWTO/html_single/TCP-Keepalive-HOWTO/)
+   + according to man-page of `man 2 accept`, it seems that the descriptor flags inheritence is not reliable. so I won't use `SO_KEEPALIVE` in the `bind` socket. and this option should be configurable by user. so this simple server example won't use `SO_KEEPALIVE` option.
+   
+   
