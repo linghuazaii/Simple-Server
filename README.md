@@ -31,7 +31,9 @@ Details after research:
    + [Nagel Algorithm](https://en.wikipedia.org/wiki/Nagle%27s_algorithm)
    + I think Nagel Algorithm should be disabled in my simple server, because it is multithreading, I can't ensure the order is always `read-write-read-write`, it is normal that a `write-write-read` happens. 
  - `TCP_QUICKACK`: since we have set `TCP_NODELAY`, there is no need to set `TCP_QUICKACK`, just use default delayed ack to improve network performance.
- - 
+ - `epoll_create` is just legacy, no much difference with `epoll_create1`
+ - no much difference between `accept` and `accept4`, `accept4` is convenient for set `O_NONBLOCKING` for connected socket.
+ 
    
    
    
