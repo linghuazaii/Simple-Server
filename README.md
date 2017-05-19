@@ -33,7 +33,8 @@ Details after research:
  - `TCP_QUICKACK`: since we have set `TCP_NODELAY`, there is no need to set `TCP_QUICKACK`, just use default delayed ack to improve network performance.
  - `epoll_create` is just legacy, no much difference with `epoll_create1`
  - no much difference between `accept` and `accept4`, `accept4` is convenient for set `O_NONBLOCKING` for connected socket.
+ - for `EPOLLONESHOT`, there is no need for use this option if we `read` until `EAGAIN` every time.
  
-   
+### Enough Details, Going To Implementation
    
    
