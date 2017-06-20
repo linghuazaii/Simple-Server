@@ -24,12 +24,18 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <netinet/tcp.h>
+#include "threadpool.h"
 using namespace std;
 
 #define PORT 19920
 #define LINE 256
 
-int main(int argc, char **argv) {
+typedef struct data_t {
+    uint32_t length;
+    char buffer[256];
+} data_t;
+
+void routine(void *arg) {
     int sock = socket(AF_INET, SOCK_STREAM, 0);
     struct sockaddr_in server;
     server.sin_family = AF_INET;
@@ -38,16 +44,28 @@ int main(int argc, char **argv) {
     FILE *poem = fopen("poem.txt", "r");
     connect(sock, (struct sockaddr *)&server, sizeof(server));
     char buffer[LINE];
+    data_t data;
     while (true) {
         char *end = fgets(buffer, LINE, poem);
         if (end == NULL)
             break;
-        write(sock, buffer, strlen(buffer));
+        data.length = strlen(buffer);
+        strcpy(data.buffer, buffer);
+        write(sock, &data, data.length + 4);
+        cout<<"data send!"<<endl;
         int count = read(sock, buffer, LINE);
         buffer[count] = 0;
         cout<<buffer<<endl;
         sleep(1);
     }
+}
+
+int main(int argc, char **argv) {
+    threadpool_t *pool = threadpool_create(8, 3000, 0);
+    for (int i = 0; i < 100; ++i) {
+        threadpool_add(pool, routine, NULL, 0);
+    }
+    sleep(86400);
 
     return 0;
 }

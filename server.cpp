@@ -88,7 +88,6 @@ typedef struct ep_data_t {
     ep_buffer_t ep_write_buffer;
     void (*read_callback) (void *);
     void (*write_callback) (void *);
-    pthread_mutex_t buffer_mtx;
     void *extra;
 } ep_data_t;
 
@@ -165,7 +164,7 @@ int ss_socket() {
     serv_addr.sin_addr.s_addr = INADDR_ANY;
 
     set_reuseaddr(sock);
-    //set_tcp_defer_accept(sock);
+    set_tcp_defer_accept(sock);
 
     int ret = bind(sock, (struct sockaddr *)&serv_addr, sizeof(serv_addr));
     if (ret == -1)
@@ -189,7 +188,7 @@ int ss_epoll_create() {
 int ss_epoll_ctl(int epfd, int op, int fd, struct epoll_event *event) {
     int ret = epoll_ctl(epfd, op, fd, event);
     if (ret == -1)
-        abort("epoll_ctl error");
+        err("epoll_ctl error");
 
     return 0;
 }
@@ -239,28 +238,35 @@ void do_accept(void *arg) {
     ep_data_t *data = (ep_data_t *)arg;
     struct sockaddr_in client;
     socklen_t addrlen = sizeof(client);
-    int conn = accept4(data->eventfd, (struct sockaddr *)&client, &addrlen, SOCK_NONBLOCK);
-    if (conn == -1)
-        abort("accpet4 error");
-    char ip[IPLEN];
-    inet_ntop(AF_INET, &client.sin_addr, ip, IPLEN);
-    log("new connection from %s, fd: %d", ip, conn);
+    while (true) {
+        int conn = accept4(data->eventfd, (struct sockaddr *)&client, &addrlen, SOCK_NONBLOCK);
+        if (conn == -1) {
+            if (errno == EAGAIN)
+                break;
+            abort("accpet4 error");
+        }
+        char ip[IPLEN];
+        inet_ntop(AF_INET, &client.sin_addr, ip, IPLEN);
+        log("new connection from %s, fd: %d", ip, conn);
 
-    struct epoll_event event;
-    event.data.fd = conn;
-    //event.events = EPOLLIN | EPOLLOUT | EPOLLRDHUP; //shouldn't include EPOLLOUT '
-    event.events = EPOLLIN | EPOLLET | EPOLLRDHUP;
-    ep_data_t *ep_data = (ep_data_t *)ss_malloc(sizeof(ep_data_t));
-    ep_data->epfd = data->epfd;
-    ep_data->eventfd = conn;
-    ep_data->packet_state = PACKET_START;
-    ep_data->read_callback = handle_request; /* callback for request */
-    ep_data->write_callback = handle_response; /* callback for response */
-    pthread_mutex_init(&ep_data->buffer_mtx, NULL);
-    ss_epoll_ctl(data->epfd, EPOLL_CTL_ADD, conn, &event);
+        struct epoll_event event;
+        //event.events = EPOLLIN | EPOLLOUT | EPOLLRDHUP; //shouldn't include EPOLLOUT '
+        event.events = EPOLLIN | EPOLLET;
+        ep_data_t *ep_data = (ep_data_t *)ss_malloc(sizeof(ep_data_t));
+        ep_data->epfd = data->epfd;
+        ep_data->eventfd = conn;
+        ep_data->packet_state = PACKET_START;
+        ep_data->read_callback = handle_request; /* callback for request */
+        ep_data->write_callback = handle_response; /* callback for response */
+        event.data.ptr = ep_data;
+        ss_epoll_ctl(data->epfd, EPOLL_CTL_ADD, conn, &event);
+        log("add event for fd: %d", conn);
+    }
 }
 
+void do_close(void *arg);
 void do_read(void *arg) {
+    log("enter do_read");
     ep_data_t *data = (ep_data_t *)arg;
     while (true) {
         if (data->packet_state == PACKET_START) {
@@ -273,21 +279,21 @@ void do_read(void *arg) {
                 err("read error for %d", data->eventfd);
                 return;
             }
-            pthread_mutex_lock(&data->buffer_mtx);
+            log("packet length: %d", length);
+            if (length == 0) {/* socket need to be closed */
+                do_close(data);
+                break;
+            }
             data->ep_read_buffer.length = length;
             data->ep_read_buffer.buffer = (char *)ss_malloc(length);
             data->ep_read_buffer.count = 0;
-            pthread_mutex_unlock(&data->buffer_mtx);
         }
-        pthread_mutex_lock(&data->buffer_mtx);
         int count = read(data->eventfd, data->ep_read_buffer.buffer + data->ep_read_buffer.count, data->ep_read_buffer.length - data->ep_read_buffer.count);
         if (count == -1) {
             if (errno == EAGAIN) {
-                pthread_mutex_unlock(&data->buffer_mtx);
                 break; /* no more data to read */
             }
             err("read error for %d", data->eventfd);
-            pthread_mutex_unlock(&data->buffer_mtx);
             return;
         }
         data->ep_read_buffer.count += count;
@@ -298,11 +304,11 @@ void do_read(void *arg) {
             //data->read_callback(data); /* should not block read thread */
             request_t *req = (request_t *)ss_malloc(sizeof(request_t));
             req->ep_data = data;
-            req->buffer = data->ep_read_buffer.buffer;
             req->length = data->ep_read_buffer.length;
+            req->buffer = (char *)ss_malloc(data->ep_read_buffer.length);
+            memcpy(req->buffer, data->ep_read_buffer.buffer, req->length);
             threadpool_add(worker_threadpool, data->read_callback, (void *)req, 0);
         }
-        pthread_mutex_unlock(&data->buffer_mtx);
     }
 }
 
@@ -313,9 +319,8 @@ void reset_epdata(ep_data_t *data) {
     memset(&data->ep_read_buffer, 0, sizeof(data->ep_read_buffer));
     /* remove write event */
     struct epoll_event event;
-    event.data.fd = data->eventfd;
     event.data.ptr = (void *)data;
-    event.events = EPOLLIN | EPOLLET | EPOLLRDHUP;
+    event.events = EPOLLIN | EPOLLET;
     ss_epoll_ctl(data->epfd, EPOLL_CTL_MOD, data->eventfd, &event);
 }
 
@@ -337,16 +342,17 @@ void do_write(void *arg) {
             //data->write_callback(data); /* should not block write */
             threadpool_add(worker_threadpool, data->write_callback, NULL, 0);
             reset_epdata(data);
+            break;
         }
     }
 }
 
 void do_close(void *arg) {
+    log("do close, free data!");
     ep_data_t *data = (ep_data_t *)arg;
-    ss_epoll_ctl(data->epfd, EPOLL_CTL_DEL, data->eventfd, NULL);
-    close(data->eventfd);
-    pthread_mutex_destroy(&data->buffer_mtx);
     if (data != NULL) {
+        ss_epoll_ctl(data->epfd, EPOLL_CTL_DEL, data->eventfd, NULL);
+        close(data->eventfd);
         if (data->ep_read_buffer.buffer != NULL)
             ss_free(data->ep_read_buffer.buffer);
         if (data->ep_write_buffer.buffer != NULL)
@@ -363,27 +369,29 @@ void event_loop() {
     listener_data->epfd = epfd;
     listener_data->eventfd = listener;
     struct epoll_event ev_listener;
-    ev_listener.data.fd = listener;
     ev_listener.data.ptr = listener_data;
-    ev_listener.events = EPOLLIN;
-    //ss_epoll_ctl(epfd, EPOLL_CTL_ADD, listener, &ev_listener);
+    ev_listener.events = EPOLLIN | EPOLLET;
+    ss_epoll_ctl(epfd, EPOLL_CTL_ADD, listener, &ev_listener);
     epoll_ctl(epfd, EPOLL_CTL_ADD, listener, &ev_listener);
     struct epoll_event events[MAX_EVENTS];
     for (;;) {
         int nfds = ss_epoll_wait(epfd, events, MAX_EVENTS);
-        log("nfds: %d", nfds);
         for (int i = 0; i < nfds; ++i) {
-            log("events fd: %d", events[i].data.fd);
-            if (events[i].data.fd == listener) {
+            log("current eventfd: %d", ((ep_data_t *)events[i].data.ptr)->eventfd);
+            if (((ep_data_t *)events[i].data.ptr)->eventfd == listener) {
+                log("listenfd event.");
                 threadpool_add(listener_threadpool, do_accept, events[i].data.ptr, 0);
             } else {
                 if (events[i].events & EPOLLIN) {
+                    log("read event.");
                     threadpool_add(read_threadpool, do_read, events[i].data.ptr, 0);
                 } 
                 if (events[i].events & EPOLLOUT) {
+                    log("write event.");
                     threadpool_add(write_threadpool, do_write, events[i].data.ptr, 0);
                 }
-                if (events[i].events & EPOLLRDHUP | events[i].events & EPOLLERR | events[i].events & EPOLLHUP) {
+                if (events[i].events & EPOLLERR | events[i].events & EPOLLHUP) {
+                    log("close event.");
                     threadpool_add(error_threadpool, do_close, events[i].data.ptr, 0);
                 }
             }
