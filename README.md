@@ -36,5 +36,5 @@ Details after research:
  - for `EPOLLONESHOT`, there is no need for use this option if we `read` until `EAGAIN` every time.
  
 ### Enough Details, Going To Implementation
-   
-   
+ - compile server with `g++ server.cpp threadpool.c -o server -lpthread`  
+ - compile client with `g++ client.cpp threadpool.c -o client -lpthread`
