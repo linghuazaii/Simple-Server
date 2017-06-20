@@ -165,7 +165,7 @@ int ss_socket() {
     serv_addr.sin_addr.s_addr = INADDR_ANY;
 
     set_reuseaddr(sock);
-    set_tcp_defer_accept(sock);
+    //set_tcp_defer_accept(sock);
 
     int ret = bind(sock, (struct sockaddr *)&serv_addr, sizeof(serv_addr));
     if (ret == -1)
@@ -183,7 +183,7 @@ int ss_epoll_create() {
     if (epoll_fd == -1)
         abort("epoll create error");
 
-    return 0;
+    return epoll_fd;
 }
 
 int ss_epoll_ctl(int epfd, int op, int fd, struct epoll_event *event) {
@@ -199,7 +199,7 @@ int ss_epoll_wait(int epfd, struct epoll_event *events, int maxevents) {
     if (ret == -1)
         abort("epoll_wait error");
 
-    return 0;
+    return ret;
 }
 
 void ss_free_imp(void **ptr) {
@@ -243,8 +243,8 @@ void do_accept(void *arg) {
     if (conn == -1)
         abort("accpet4 error");
     char ip[IPLEN];
-    inet_ntop(AF_INET, client.sin_addr, ip, IPLEN);
-    log("new connection from %s", ip);
+    inet_ntop(AF_INET, &client.sin_addr, ip, IPLEN);
+    log("new connection from %s, fd: %d", ip, conn);
 
     struct epoll_event event;
     event.data.fd = conn;
@@ -292,13 +292,13 @@ void do_read(void *arg) {
         }
         data->ep_read_buffer.count += count;
         if (data->ep_read_buffer.count < data->ep_read_buffer.length) {
-            data->packet_state = PACKET_CHUNK;
+            data->packet_state = PACKET_CHUNCK;
         } else {
             data->packet_state = PACKET_START; /* reset to PACKET_START to recv new packet */
             //data->read_callback(data); /* should not block read thread */
             request_t *req = (request_t *)ss_malloc(sizeof(request_t));
             req->ep_data = data;
-            req->ep_buffer = data->ep_read_buffer.buffer;
+            req->buffer = data->ep_read_buffer.buffer;
             req->length = data->ep_read_buffer.length;
             threadpool_add(worker_threadpool, data->read_callback, (void *)req, 0);
         }
@@ -358,20 +358,24 @@ void do_close(void *arg) {
 void event_loop() {
     int listener = ss_socket();
     int epfd = ss_epoll_create();
+    log("epollfd: %d\tlistenfd: %d", epfd, listener);
     ep_data_t *listener_data = (ep_data_t *)ss_malloc(sizeof(ep_data_t));
-    data.epfd = epfd;
-    data.eventfd = listener;
+    listener_data->epfd = epfd;
+    listener_data->eventfd = listener;
     struct epoll_event ev_listener;
     ev_listener.data.fd = listener;
     ev_listener.data.ptr = listener_data;
     ev_listener.events = EPOLLIN;
-    ss_epoll_ctl(epfd, EPOLL_CTL_ADD, listener, &ev_listener)
+    //ss_epoll_ctl(epfd, EPOLL_CTL_ADD, listener, &ev_listener);
+    epoll_ctl(epfd, EPOLL_CTL_ADD, listener, &ev_listener);
     struct epoll_event events[MAX_EVENTS];
     for (;;) {
-        nfds = ss_epoll_wait(epfd, events, MAX_EVENTS);
+        int nfds = ss_epoll_wait(epfd, events, MAX_EVENTS);
+        log("nfds: %d", nfds);
         for (int i = 0; i < nfds; ++i) {
+            log("events fd: %d", events[i].data.fd);
             if (events[i].data.fd == listener) {
-                threadpool_add(listener_threadpoll, do_accept, events[i].data.ptr, 0);
+                threadpool_add(listener_threadpool, do_accept, events[i].data.ptr, 0);
             } else {
                 if (events[i].events & EPOLLIN) {
                     threadpool_add(read_threadpool, do_read, events[i].data.ptr, 0);
@@ -379,7 +383,7 @@ void event_loop() {
                 if (events[i].events & EPOLLOUT) {
                     threadpool_add(write_threadpool, do_write, events[i].data.ptr, 0);
                 }
-                if (events[i].events & EPOLLRDHUP | events[i].events & EPOLLERR | events[i] & EPLLHUP) {
+                if (events[i].events & EPOLLRDHUP | events[i].events & EPOLLERR | events[i].events & EPOLLHUP) {
                     threadpool_add(error_threadpool, do_close, events[i].data.ptr, 0);
                 }
             }
