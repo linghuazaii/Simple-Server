@@ -56,8 +56,9 @@ void routine(void *arg) {
         int count = read(sock, buffer, LINE);
         buffer[count] = 0;
         cout<<buffer<<endl;
-        sleep(1);
+    //    sleep(1);
     }
+    fclose(poem);
 }
 
 int main(int argc, char **argv) {
