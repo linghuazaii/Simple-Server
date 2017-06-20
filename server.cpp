@@ -289,6 +289,10 @@ void do_read(void *arg) {
             data->ep_read_buffer.count = 0;
         }
         int count = read(data->eventfd, data->ep_read_buffer.buffer + data->ep_read_buffer.count, data->ep_read_buffer.length - data->ep_read_buffer.count);
+        if (count == 0) {
+            do_close(data);
+            break;
+        }
         if (count == -1) {
             if (errno == EAGAIN) {
                 break; /* no more data to read */
