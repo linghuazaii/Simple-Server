@@ -38,3 +38,4 @@ Details after research:
 ### Enough Details, Going To Implementation
  - compile server with `g++ server.cpp threadpool.c -o server -lpthread`  
  - compile client with `g++ client.cpp threadpool.c -o client -lpthread`
+ - full version please see [Charles-Server](https://github.com/linghuazaii/Charles-Server)
